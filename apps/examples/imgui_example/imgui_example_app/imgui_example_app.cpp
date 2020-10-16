@@ -20,7 +20,7 @@
 #include "le_ui_event/le_ui_event.h"
 
 #if ( WIN32 )
-#	pragma comment( lib, "modules/imgui.lib" )
+#	pragma comment( lib, "imgui.lib" )
 #endif
 
 struct imgui_example_app_o {

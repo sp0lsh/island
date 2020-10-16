@@ -25,7 +25,7 @@ else()
     add_library(${TARGET} STATIC ${SOURCES})
 
     # link against static version of imgui library
-    target_link_libraries(${TARGET} PRIVATE imgui)
+    target_link_libraries(${TARGET} PUBLIC imgui)
 
     add_static_lib( ${TARGET} )
 
