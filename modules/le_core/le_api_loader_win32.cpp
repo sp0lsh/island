@@ -62,6 +62,10 @@ static void *load_library( const char *lib_name ) {
 	// fprintf( stdout, "[ %-20.20s ] %10s %-20s: %-50s\n", LOG_PREFIX_STR, "", "Load Module", lib_name );
 	// fflush( stdout );
 
+	auto file_path_src = std::filesystem::canonical( lib_name );
+	auto file_path_dst = std::filesystem::canonical( lib_name ).append(".hotreload");
+	std::filesystem::copy( file_path_src, file_path_dst );	
+
 	void *handle = LoadLibrary( lib_name );
 	if ( handle == NULL ) {
 		auto loadResult = GetLastError();
