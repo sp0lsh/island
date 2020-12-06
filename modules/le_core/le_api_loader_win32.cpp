@@ -17,6 +17,8 @@
 #	include <iostream>
 #	include <filesystem>
 
+namespace fs = std::filesystem;
+
 struct le_file_watcher_o;
 
 #	define LOG_PREFIX_STR "LOADER"
@@ -37,6 +39,13 @@ bool delete_old_artifacts( char const *path );     //ffdecl
 
 // ----------------------------------------------------------------------
 
+static fs::path getAbsolutePath( const fs::path &relativePath ) {
+	char result[ MAX_PATH ];
+	auto exe_file = std::string( result, GetModuleFileName( NULL, result, MAX_PATH ) );
+	auto exe_dir  = fs::path( exe_file ).remove_filename();
+	return exe_dir / relativePath.filename();
+}
+
 static void unload_library( void *handle_, const char *path ) {
 	if ( handle_ ) {
 		auto result = FreeLibrary( static_cast<HMODULE>( handle_ ) );
@@ -49,7 +58,7 @@ static void unload_library( void *handle_, const char *path ) {
 			if ( grab_and_drop_pdb_handle( path ) ) {
 				delete_old_artifacts( path );
 			} else {
-					fprintf( stderr, "[ %-20.20s ] %10s %-20s: %s\n", LOG_PREFIX_STR, "ERROR", "DropHandles", "Could not drop pdb handles." );
+				fprintf( stderr, "[ %-20.20s ] %10s %-20s: %s\n", LOG_PREFIX_STR, "ERROR", "DropHandles", "Could not drop pdb handles." );
 			}
 		}
 	}
@@ -59,23 +68,35 @@ static void unload_library( void *handle_, const char *path ) {
 
 static void *load_library( const char *lib_name ) {
 
-	// fprintf( stdout, "[ %-20.20s ] %10s %-20s: %-50s\n", LOG_PREFIX_STR, "", "Load Module", lib_name );
+	fprintf( stdout, "[ %-20.20s ] %10s %-20s: %-50s\n", LOG_PREFIX_STR, "", "Load Module", lib_name );
 	// fflush( stdout );
 
-	auto file_path_src = std::filesystem::canonical( lib_name );
-	auto file_path_dst = std::filesystem::canonical( lib_name ).append(".hotreload");
-	std::filesystem::copy( file_path_src, file_path_dst );	
+	auto lib_filename = fs::path( lib_name ).filename();
+	auto file_path_src = getAbsolutePath( lib_filename );
+	auto file_path_dst = getAbsolutePath( lib_filename );
 
-	void *handle = LoadLibrary( lib_name );
+	// VS2019 fail to overwrite loaded dll file, create copy of lib file for loading
+	int rndNumber = 1000 + std::rand() % ( 9999 - 1000 );
+	auto rndExt = fs::path( std::to_string( rndNumber ) + ".dll" );
+	file_path_dst.replace_extension( rndExt );
+
+	std::string lib_to_load = lib_name;
+	if ( fs::exists( file_path_src ) ) {
+		const auto copyOptions = fs::copy_options::update_existing | fs::copy_options::overwrite_existing;
+		std::filesystem::copy_file( file_path_src, file_path_dst, copyOptions );
+		lib_to_load = file_path_dst.filename().string();
+	}
+
+	void *handle = LoadLibrary( lib_to_load.c_str() );
 	if ( handle == NULL ) {
 		auto loadResult = GetLastError();
 
-		fprintf( stdout, "[ %-20.20s ] %10s %-20s: %-50s, result: %ul\n", LOG_PREFIX_STR, "ERROR", "Loading Module", lib_name, loadResult );
+		fprintf( stdout, "[ %-20.20s ] %10s %-20s: %-50s, result: %ul\n", LOG_PREFIX_STR, "ERROR", "Loading Module", lib_to_load.c_str(), loadResult );
 		fflush( stdout );
 
 		exit( 1 );
 	} else {
-		fprintf( stdout, "[ %-20.20s ] %10s %-20s: %-50s, handle: %p\n", LOG_PREFIX_STR, "OK", "Loaded Module", lib_name, handle );
+		fprintf( stdout, "[ %-20.20s ] %10s %-20s: %-50s, handle: %p\n", LOG_PREFIX_STR, "OK", "Loaded Module", lib_to_load.c_str(), handle );
 		fflush( stdout );
 	}
 	return handle;
@@ -367,7 +388,6 @@ bool close_handles_held_by_process_id( ULONG process_id, wchar_t const *needle_s
 			continue;
 		}
 
-
 		std::unique_ptr<HANDLE, HandleDeleter> pFileHandle( new HANDLE );
 
 		// Duplicate the handle so we can query it.
@@ -378,7 +398,7 @@ bool close_handles_held_by_process_id( ULONG process_id, wchar_t const *needle_s
 		         pFileHandle.get(),
 		         0,
 		         0,
-		          0) ) ) {
+		         0 ) ) ) {
 			printf( "Warning: NtDuplicateObject: could not duplicate process handle [%#x]\n", sys_handle->Handle );
 			fflush( stdout );
 			return false;
@@ -437,7 +457,7 @@ bool close_handles_held_by_process_id( ULONG process_id, wchar_t const *needle_s
 
 			// Forcibly close the handle - drop it.
 			//
-			// Note that this does not yet delete the handle - it just means that we took ownership 
+			// Note that this does not yet delete the handle - it just means that we took ownership
 			// away from the processes which held the handle.
 			pFileHandle.reset();
 
@@ -457,7 +477,7 @@ std::vector<DWORD> enumerate_processes_holding_handle_to_file( PCWSTR file_path,
 	std::vector<DWORD> result;
 
 	DWORD dwSession;
-	WCHAR szSessionKey[ CCH_RM_SESSION_KEY + 1 ] = { 0 };
+	WCHAR szSessionKey[ CCH_RM_SESSION_KEY + 1 ] = {0};
 	DWORD dwError                                = RmStartSession( &dwSession, 0, szSessionKey );
 	//wprintf(L"RmStartSession returned %d\n", dwError);
 	if ( dwError != ERROR_SUCCESS ) {
@@ -516,7 +536,16 @@ bool grab_and_drop_pdb_handle( char const *path ) {
 
 	// convert path to wstring
 
-	auto file_path = std::filesystem::canonical( path );
+	printf( "grab_and_drop_pdb_handle\n" );
+
+	// auto file_path = std::filesystem::canonical( path );
+	char result[ MAX_PATH ];
+	auto cwd = std::string( result, GetModuleFileName( NULL, result, MAX_PATH ) );
+	fprintf( stdout, "cwd: %s\n", cwd.c_str() );
+	auto exe_path_src = fs::path( cwd );
+	fprintf( stdout, "exe0: %s\n", exe_path_src.string().c_str() );
+	auto lib_filename = fs::path( path ).filename();
+	auto file_path    = exe_path_src.remove_filename() / lib_filename;
 
 	if ( file_path.extension() == ".dll" ) {
 		file_path.replace_extension( ".pdb.old" );
@@ -556,7 +585,8 @@ bool delete_old_artifacts( char const *path ) {
 	// Attempts to delete a "${path}.dll.old", and "${path}.pdb.old" file
 	// where ${path} is basename of path, e.g. path == './le_renderer'
 
-	auto pdb_file_path = std::filesystem::canonical( path );
+	auto lib_filename  = fs::path( path ).filename();
+	auto pdb_file_path = getAbsolutePath( lib_filename );
 
 	if ( pdb_file_path.extension() == ".dll" ) {
 		pdb_file_path.replace_extension( ".pdb.old" );
@@ -571,7 +601,8 @@ bool delete_old_artifacts( char const *path ) {
 	}
 	{
 		// Delete old dll
-		auto dll_file_path = std::filesystem::canonical( path );
+		auto dll_file_path = getAbsolutePath( lib_filename );
+
 		dll_file_path.replace_extension( ".dll.old" );
 		auto result = CreateFile( dll_file_path.string().c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_FLAG_DELETE_ON_CLOSE, NULL );
 		CloseHandle( result );
